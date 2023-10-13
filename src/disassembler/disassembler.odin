@@ -25,15 +25,16 @@ disassemble :: proc(path: string) -> Disassembler_Error {
 		return err
 	}
 
-	instruction := [2]byte{0, 0}
+	instruction: u16
 	length := len(data)
 	for index := 0; index < length; index += 1 {
-		instruction[0] = data[index]
+		instruction = cast(u16)data[index]
+		instruction <<= 8
 		second_index := index >= length ? length : index + 1
-		instruction[1] = data[second_index]
+		instruction |= cast(u16)data[second_index]
 		index += 1
 
-		fmt.printf("%x %x\n", instruction[0], instruction[1])
+		fmt.printf("%x\n", instruction)
 	}
 
 	#partial switch err {

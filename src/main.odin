@@ -21,8 +21,8 @@ App :: struct {
 
 main :: proc() {
 	fmt.println("Running...")
-	if dis.dissassemble("roms/splash.ch8") != dis.Disassembler_Error.None {
-		
+	if dis.disassemble("roms/splash.ch8") != dis.Disassembler_Error.None {
+
 	}
 
 	err := sdl.Init(sdl.INIT_EVERYTHING)
