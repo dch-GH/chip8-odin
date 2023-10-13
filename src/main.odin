@@ -1,40 +1,37 @@
 package main
 
 import "core:fmt"
+import alg "core:math/linalg"
 import sdl "vendor:sdl2"
 import img "vendor:sdl2/image"
-import alg "core:math/linalg"
 
-import "util"
 import dis "disassembler"
+import "util"
 
 Performance_Stats :: struct {
-	fps: u32,
-	frame_time: f32
+	fps:        u32,
+	frame_time: f32,
 }
 
 App :: struct {
-	running: bool,
-	window: ^sdl.Window,
+	running:  bool,
+	window:   ^sdl.Window,
 	renderer: ^sdl.Renderer,
+	chip:     ^Interpreter,
 }
 
 main :: proc() {
 	fmt.println("Running...")
-	if dis.disassemble("roms/splash.ch8") != dis.Disassembler_Error.None {
-
-	}
-
 	err := sdl.Init(sdl.INIT_EVERYTHING)
 	if err != 0 {
 		panic("SDL2 Init failed.")
 	}
 	defer sdl.Quit()
-	
+
 	img.Init(img.INIT_PNG)
 	defer img.Quit()
 
-	min_width :i32 = 32 * 16
+	min_width: i32 = 32 * 16
 
 	window := sdl.CreateWindow(
 		"sdl",
@@ -54,11 +51,20 @@ main :: proc() {
 
 	renderer := sdl.GetRenderer(window)
 	if renderer == nil {
-		panic("Failed to GetRenderer!")
+		panic("SDL2 GetRenderer failed!")
 	}
 
-	App := App {
-		running = true
+	app := new(App)
+	app.running = true
+	app.window = window
+	app.renderer = renderer
+	app.chip = new(Interpreter)
+	defer free(app.chip)
+	defer free(app)
+
+	if !load_rom(app.chip, "roms/splash.ch8") {
+		fmt.eprintln("Couldn't load rom!")
+		quit(app)
 	}
 
 	quit :: proc(state: ^App) {
@@ -66,16 +72,16 @@ main :: proc() {
 		state.running = false
 	}
 
-	for App.running {
+	for app.running {
 		event: sdl.Event
 		for sdl.PollEvent(&event) {
 			#partial switch event.type {
 			case sdl.EventType.QUIT:
-				quit(&App)
+				quit(app)
 			case sdl.EventType.KEYUP:
 				{
 					if event.key.keysym.sym == sdl.Keycode.ESCAPE {
-						quit(&App)
+						quit(app)
 					}
 				}
 			}
@@ -97,4 +103,3 @@ main :: proc() {
 		sdl.RenderPresent(renderer)
 	}
 }
-

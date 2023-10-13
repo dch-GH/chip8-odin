@@ -1,7 +1,11 @@
 package main
 
+import "core:fmt"
+import "core:mem"
+import "core:os"
+
 Interpreter :: struct {
-	memory: [4096]u8, // "heap" memory
+	memory: [4096]byte, // "heap" memory
 	V:      [16]u8, // the Vx registers 0-16 (0-F hex) V16/VF register should not be used by programs, used as a flag by instructions.
 	I:      u16, // generally used to store memory addresses. lowest 12 bits are usually only needed.
 	PC:     u16, // program counter, store currently executing address.
@@ -11,12 +15,62 @@ Interpreter :: struct {
 	ST:     u8, // sound timer register. decrements at a rate of 60Hz, however, as long as ST's value is greater than zero, the Chip-8 buzzer will sound. When ST reaches zero, the sound timer deactivates.
 }
 
-load_rom :: proc(emu: ^Interpreter, path: string) {
+load_rom :: proc(chip: ^Interpreter, path: string) -> bool {
+	success := true
+	if !os.is_file(path) {
+		success = true
+	}
+
+	data, ok := os.read_entire_file(path)
+	success = ok
+	if !success {
+		return success
+	}
+
+	for b, i in data {
+		fmt.printf("[%d]: %x\n", i, b)
+	}
+
+	fmt.println()
+	fmt.println("------------------")
+	fmt.println()
+
+	{
+		// fmt.printf("%p\n", &chip.memory)
+		offset := mem.ptr_offset(&chip.memory[0], 512)
+		mem.copy(offset, &data[0], len(data))
+
+		// x := transmute(uint)(&chip.memory[512])
+		// y := transmute(uint)(offset)
+
+		// fmt.printf("%d\n", y - x)
+
+		for x, address in chip.memory {
+			if address < 512 {continue}
+			fmt.printf("[%d]: %x\n", address, x)
+		}
+	}
+
+	return success
+}
+
+tick :: proc(chip: ^Interpreter, ticks: int) {
 
 }
 
-tick :: proc(emu: ^Interpreter, ticks: int) {
+parse_instructions :: proc(chip: ^Interpreter) {
+	// length := len(data)
+	// instructions := make([dynamic]u16, 0)
+	// for index := 0; index < length; index += 1 {
+	// 	instruction := cast(u16)data[index]
+	// 	instruction <<= 8
+	// 	second_index := index >= length ? length : index + 1
+	// 	instruction |= cast(u16)data[second_index]
+	// 	index += 1
 
+	// 	append_elem(&instructions, instruction)
+	// 	// fmt.printf("%x\n", instruction)
+	// }
 }
 
 //b 0000 0000 0000 0000
