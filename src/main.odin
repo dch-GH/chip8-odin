@@ -59,7 +59,11 @@ main :: proc() {
 	app.window = window
 	app.renderer = renderer
 	app.chip = new(Interpreter)
-	defer free(app.chip)
+	incl(&app.chip.debug_flags, Debug_Flag.Log_RAM, Debug_Flag.Log_ROM)
+
+	if !interpreter_initialize(app.chip) {quit(app)}
+
+	defer interpreter_destroy(app.chip)
 	defer free(app)
 
 	if !load_rom(app.chip, "roms/splash.ch8") {
@@ -87,11 +91,18 @@ main :: proc() {
 			}
 		}
 
+		if !app.running {break}
+
+		ticks := sdl.GetTicks()
+
 		mouse_x, mouse_y: i32
 		sdl.GetMouseState(&mouse_x, &mouse_y)
 
 		rect := sdl.Rect{0, 0, 200, 200}
 		sdl.GetWindowSize(window, &rect.w, &rect.h)
+
+		interpreter_tick(app.chip, ticks)
+
 		sdl.RenderClear(renderer)
 		{
 			sdl.SetRenderDrawColor(renderer, 0, 0, 100, 255)

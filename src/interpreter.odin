@@ -4,74 +4,160 @@ import "core:fmt"
 import "core:mem"
 import "core:os"
 
+LOG_PATH :: "log.txt"
+MASK_X :: 0xF
+MASK_Y :: 0xFF
+MEM_LENGTH :: 4096
+
+Debug_Flag :: enum u8 {
+	None = 0,
+	Log_RAM, // Log the contents of memory starting at 0x200, ending at 0x600.
+	Log_ROM, // Log the contents of selected ROM on load.
+}
+
+Debug_Set :: bit_set[Debug_Flag]
+
 Interpreter :: struct {
-	memory: [4096]byte, // "heap" memory
-	V:      [16]u8, // the Vx registers 0-16 (0-F hex) V16/VF register should not be used by programs, used as a flag by instructions.
-	I:      u16, // generally used to store memory addresses. lowest 12 bits are usually only needed.
-	PC:     u16, // program counter, store currently executing address.
-	SP:     u8, // stack pointer. used to point to the topmost level of the stack.
-	stack:  [16]u16, // the stack. used to store the address that the interpreter shoud return to when finished with a subroutine. allows up to 16 levels of nested subroutines.
-	DT:     u8, // active whenever the delay timer register (DT) is non-zero. This timer does nothing more than subtract 1 from the value of DT at a rate of 60Hz. When DT reaches 0, it deactivates.
-	ST:     u8, // sound timer register. decrements at a rate of 60Hz, however, as long as ST's value is greater than zero, the Chip-8 buzzer will sound. When ST reaches zero, the sound timer deactivates.
+	memory:      [4096]byte, // "heap" memory
+	V:           [16]u8, // the Vx registers 0-16 (0-F hex) V16/VF register should not be used by programs, used as a flag by instructions.
+	I:           u16, // generally used to store memory addresses. lowest 12 bits are usually only needed.
+	PC:          u16, // program counter, store currently executing address.
+	SP:          u8, // stack pointer. used to point to the topmost level of the stack.
+	stack:       [16]u16, // the stack. used to store the address that the interpreter shoud return to when finished with a subroutine. allows up to 16 levels of nested subroutines.
+	DT:          u8, // active whenever the delay timer register (DT) is non-zero. This timer does nothing more than subtract 1 from the value of DT at a rate of 60Hz. When DT reaches 0, it deactivates.
+	ST:          u8, // sound timer register. decrements at a rate of 60Hz, however, as long as ST's value is greater than zero, the Chip-8 buzzer will sound. When ST reaches zero, the sound timer deactivates.
+	log_file:    os.Handle,
+	debug_flags: Debug_Set,
 }
 
 load_rom :: proc(chip: ^Interpreter, path: string) -> bool {
-	success := true
-	if !os.is_file(path) {
-		success = true
-	}
+	using chip
+	if !os.is_file(path) {return false}
 
 	data, ok := os.read_entire_file(path)
-	success = ok
-	if !success {
-		return success
-	}
+	if !ok {return false}
 
-	for b, i in data {
-		fmt.printf("[%d]: %x\n", i, b)
-	}
+	if Debug_Flag.Log_ROM in debug_flags {
+		log(chip, "-----------")
+		log(chip, "----ROM----")
+		log(chip, "-----------")
 
-	fmt.println()
-	fmt.println("------------------")
-	fmt.println()
-
-	{
-		// fmt.printf("%p\n", &chip.memory)
-		offset := mem.ptr_offset(&chip.memory[0], 512)
-		mem.copy(offset, &data[0], len(data))
-
-		// x := transmute(uint)(&chip.memory[512])
-		// y := transmute(uint)(offset)
-
-		// fmt.printf("%d\n", y - x)
-
-		for x, address in chip.memory {
-			if address < 512 {continue}
-			fmt.printf("[%d]: %x\n", address, x)
+		for b, i in data {
+			logf(chip, "[0x%X (%i)]: 0x%X == %d === %#b\n", i, i, b, b, b)
 		}
 	}
 
-	return success
+	{
+		// Load program into memory.
+		offset := mem.ptr_offset(&memory[0], 512)
+		mem.copy(offset, &data[0], len(data))
+
+		if Debug_Flag.Log_RAM in debug_flags {
+			log(chip, "--------------")
+			log(chip, "----MEMORY----")
+			log(chip, "--------------")
+
+			for x, address in memory {
+				if address < 512 || address > 1500 {continue}
+				log_address(chip, address)
+			}
+		}
+	}
+
+	return true
 }
 
-tick :: proc(chip: ^Interpreter, ticks: int) {
+interpreter_initialize :: proc(chip: ^Interpreter) -> bool {
+	using chip
+	PC = 512
 
+	handle, err := os.open(LOG_PATH, os.O_CREATE | os.O_WRONLY)
+	if err > 0 {
+		fmt.eprintf("Couldn't create log file")
+		return false
+	}
+
+	// Clear the log file first.
+	os.write_entire_file(LOG_PATH, nil)
+
+	log_file = handle
+	return true
 }
 
-parse_instructions :: proc(chip: ^Interpreter) {
-	// length := len(data)
-	// instructions := make([dynamic]u16, 0)
-	// for index := 0; index < length; index += 1 {
-	// 	instruction := cast(u16)data[index]
-	// 	instruction <<= 8
-	// 	second_index := index >= length ? length : index + 1
-	// 	instruction |= cast(u16)data[second_index]
-	// 	index += 1
+interpreter_tick :: proc(chip: ^Interpreter, ticks: u32) -> Instruction {
+	using chip
 
-	// 	append_elem(&instructions, instruction)
-	// 	// fmt.printf("%x\n", instruction)
-	// }
+	// Try to parse an instruction from memory.
+	{
+		instruction := Instruction.Invalid
+
+		next_byte_index := cast(int)PC >= MEM_LENGTH ? MEM_LENGTH : cast(int)(PC + 1)
+		two_bytes: u16 = cast(u16)memory[PC] << 8
+		kk := cast(u16)memory[next_byte_index]
+		two_bytes |= kk
+
+		highest_nibble := cast(u8)(two_bytes >> 12)
+		x := (two_bytes >> 8) & MASK_X
+		y := kk & MASK_Y
+		nnn := two_bytes << 12
+
+		if two_bytes == cast(u16)Instruction.CLS {
+			return Instruction.CLS
+		}
+
+		// // if two_bytes & Instruction.JP_nnn {
+		// 	log(chip, "Jump")
+		// }
+
+		// for ins in Instruction {
+		// 	casted_ins := cast(u16)(ins)
+		// 	if two_bytes == casted_ins {
+		// 		// logf(chip, "Instruction: %s : 0x%X\n", ins, two_bytes)
+		// 	}
+		// }
+		PC += 2
+	}
+
+	if PC >= MEM_LENGTH {
+		PC = 512
+	}
+
+	return Instruction.Invalid
 }
+
+interpreter_destroy :: proc(chip: ^Interpreter) {
+	using chip
+	free(&chip.log_file)
+	free(chip)
+}
+
+@(private = "file")
+logf :: proc(chip: ^Interpreter, format: string, a: ..any) {
+	using chip
+	fmt.fprintf(log_file, format, ..a)
+}
+
+@(private = "file")
+log :: proc(chip: ^Interpreter, a: ..any) {
+	using chip
+	fmt.fprintln(log_file, ..a)
+}
+
+@(private = "file")
+log_address :: proc(chip: ^Interpreter, address: int) {
+	using chip
+	value_at_address := memory[address]
+	fmt.fprintf(
+		chip.log_file,
+		"[0x%X (%i)]: 0x%X == %d === %#b\n",
+		address,
+		address,
+		value_at_address,
+		value_at_address,
+		value_at_address,
+	)
+}
+
 
 //b 0000 0000 0000 0000
 //  	 x    y    n
@@ -91,7 +177,8 @@ parse_instructions :: proc(chip: ^Interpreter) {
 // In memory, the first byte of each instruction should be located at an even addresses. 
 // If a program includes sprite data, it should be padded so any instructions following it will be properly situated in RAM.
 
-Instruction :: enum {
+Instruction :: enum u16 {
+	Invalid                   = 0x0000,
 	CLS                       = 0x00E0, // CLS.  Clear the display.
 	RET                       = 0x00EE, // RET.  Return from a subroutine. The interpreter sets the program counter to the address at the top of the stack, then subtracts 1 from the stack pointer.
 	JP_nnn                    = 0x1000, // 1nnn. Jump to location nnn. The interpreter sets the program counter to nnn.
