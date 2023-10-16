@@ -2,6 +2,7 @@ package main
 
 import "core:fmt"
 import alg "core:math/linalg"
+import rnd "core:math/rand"
 import sdl "vendor:sdl2"
 import img "vendor:sdl2/image"
 
@@ -31,14 +32,15 @@ main :: proc() {
 	img.Init(img.INIT_PNG)
 	defer img.Quit()
 
-	min_width: i32 = 32 * 16
+	WIDTH :: 64
+	HEIGHT :: 32
 
 	window := sdl.CreateWindow(
 		"sdl",
 		sdl.WINDOWPOS_UNDEFINED,
 		sdl.WINDOWPOS_UNDEFINED,
-		min_width,
-		min_width,
+		WIDTH,
+		HEIGHT,
 		sdl.WINDOW_SHOWN | sdl.WINDOW_RESIZABLE,
 	)
 	if window == nil {
@@ -46,7 +48,7 @@ main :: proc() {
 	}
 	defer sdl.DestroyWindow(window)
 
-	sdl.SetWindowMinimumSize(window, min_width / 2, min_width / 2)
+	sdl.SetWindowMinimumSize(window, WIDTH, HEIGHT)
 	sdl.CreateRenderer(window, 0, {sdl.RendererFlag.ACCELERATED})
 
 	renderer := sdl.GetRenderer(window)
@@ -59,7 +61,8 @@ main :: proc() {
 	app.window = window
 	app.renderer = renderer
 	app.chip = new(Interpreter)
-	incl(&app.chip.debug_flags, Debug_Flag.Log_RAM, Debug_Flag.Log_ROM)
+	// incl(&app.chip.debug_flags, Debug_Flag.Log_RAM, Debug_Flag.Log_ROM, Debug_Flag.Print_PC_Ticks)
+	// incl(&app.chip.debug_flags, Debug_Flag.Print_Instructions)
 
 	if !interpreter_initialize(app.chip) {quit(app)}
 
@@ -102,14 +105,25 @@ main :: proc() {
 		sdl.GetWindowSize(window, &rect.w, &rect.h)
 
 		interpreter_tick(app.chip, ticks)
-
 		sdl.RenderClear(renderer)
 		{
 			sdl.SetRenderDrawColor(renderer, 0, 0, 100, 255)
 			sdl.RenderFillRect(renderer, &rect)
 
-			sdl.SetRenderDrawColor(renderer, 255, 255, 255, 255)
-			sdl.RenderDrawLine(renderer, 0, 0, mouse_x, mouse_y)
+			// Render the interpreter display.
+			{
+				for column, pixel_x in app.chip.display {
+					for pixel, pixel_y in column {
+						if pixel {
+							sdl.SetRenderDrawColor(renderer, 255, 255, 255, 255)
+							sdl.RenderDrawPoint(renderer, cast(i32)pixel_x, cast(i32)pixel_y)
+						} else {
+							sdl.SetRenderDrawColor(renderer, 5, 5, 5, 255)
+							sdl.RenderDrawPoint(renderer, cast(i32)pixel_x, cast(i32)pixel_y)
+						}
+					}
+				}
+			}
 		}
 		sdl.RenderPresent(renderer)
 	}

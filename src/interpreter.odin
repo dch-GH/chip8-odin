@@ -1,33 +1,59 @@
 package main
 
 import "core:fmt"
+import rnd "core:math/rand"
 import "core:mem"
 import "core:os"
 
+//b 0000 0000 0000 0000
+//  	 x    y    n
+//			 [   kk   ]
+//		 [    nnn     ]
+
+// nnn/addr = 12bit: lowest 12 bits
+// n/nibble = 4bit: lowest 4 bits of the instruction
+// x = 4bit: lower bits of higher byte of the instruction
+// y = 4bit: upper bits of lower byte of the instruction
+// kk/byte = 8bit: lowest 8 bits of the instruction
+
+// Vx == register number of the x nibble of the instruction
+// Vy == register number of the y nibble of the instruction
+
+// All instructions are 2 bytes long and are stored most-significant-byte first. 
+// In memory, the first byte of each instruction should be located at an even addresses. 
+// If a program includes sprite data, it should be padded so any instructions following it will be properly situated in RAM.
+
 LOG_PATH :: "log.txt"
-MASK_X :: 0xF
-MASK_Y :: 0xFF
 MEM_LENGTH :: 4096
+DISPLAY_WIDTH :: 64
+DISPLAY_HEIGHT :: 32
+DIGIT_SPRITE_SIZE :: 5
+MAX_SPRITE_SIZE :: 15 // 15 bytes
 
 Debug_Flag :: enum u8 {
 	None = 0,
 	Log_RAM, // Log the contents of memory starting at 0x200, ending at 0x600.
 	Log_ROM, // Log the contents of selected ROM on load.
+	Print_PC_Ticks, // Print the program counter every tick.
+	Print_Instructions, // Print the instructions as they are parsed.
 }
 
 Debug_Set :: bit_set[Debug_Flag]
 
 Interpreter :: struct {
-	memory:      [4096]byte, // "heap" memory
-	V:           [16]u8, // the Vx registers 0-16 (0-F hex) V16/VF register should not be used by programs, used as a flag by instructions.
-	I:           u16, // generally used to store memory addresses. lowest 12 bits are usually only needed.
-	PC:          u16, // program counter, store currently executing address.
-	SP:          u8, // stack pointer. used to point to the topmost level of the stack.
-	stack:       [16]u16, // the stack. used to store the address that the interpreter shoud return to when finished with a subroutine. allows up to 16 levels of nested subroutines.
-	DT:          u8, // active whenever the delay timer register (DT) is non-zero. This timer does nothing more than subtract 1 from the value of DT at a rate of 60Hz. When DT reaches 0, it deactivates.
-	ST:          u8, // sound timer register. decrements at a rate of 60Hz, however, as long as ST's value is greater than zero, the Chip-8 buzzer will sound. When ST reaches zero, the sound timer deactivates.
-	log_file:    os.Handle,
-	debug_flags: Debug_Set,
+	memory:          [4096]byte, // "heap" memory
+	V:               [16]u8, // the Vx registers 0-16 (0-F hex) V16/VF register should not be used by programs, used as a flag by instructions.
+	I:               u16, // generally used to store memory addresses. lowest 12 bits are usually only needed.
+	PC:              u16, // program counter, store currently executing address.
+	SP:              u8, // stack pointer. used to point to the topmost level of the stack.
+	stack:           [16]u16, // the stack. used to store the address that the interpreter shoud return to when finished with a subroutine. allows up to 16 levels of nested subroutines.
+	DT:              u8, // active whenever the delay timer register (DT) is non-zero. This timer does nothing more than subtract 1 from the value of DT at a rate of 60Hz. When DT reaches 0, it deactivates.
+	ST:              u8, // sound timer register. decrements at a rate of 60Hz, however, as long as ST's value is greater than zero, the Chip-8 buzzer will sound. When ST reaches zero, the sound timer deactivates.
+	keyboard:        [16]bool,
+	waiting_for_key: bool,
+	display:         [DISPLAY_WIDTH][DISPLAY_HEIGHT]bool,
+	log_file:        os.Handle,
+	debug_flags:     Debug_Set,
 }
 
 load_rom :: proc(chip: ^Interpreter, path: string) -> bool {
@@ -58,7 +84,7 @@ load_rom :: proc(chip: ^Interpreter, path: string) -> bool {
 			log(chip, "--------------")
 
 			for x, address in memory {
-				if address < 512 || address > 1500 {continue}
+				if address > 1500 {continue}
 				log_address(chip, address)
 			}
 		}
@@ -69,6 +95,95 @@ load_rom :: proc(chip: ^Interpreter, path: string) -> bool {
 
 interpreter_initialize :: proc(chip: ^Interpreter) -> bool {
 	using chip
+
+	SPRITES :: [5 * 16]u8 {
+		0xF0,
+		0x90,
+		0x90,
+		0x90,
+		0xF0, // 0
+		0x20,
+		0x60,
+		0x20,
+		0x20,
+		0x70, // 1
+		0xF0,
+		0x10,
+		0xF0,
+		0x80,
+		0xF0, // 2
+		0xF0,
+		0x10,
+		0xF0,
+		0x10,
+		0xF0, // 3
+		0x90,
+		0x90,
+		0xF0,
+		0x10,
+		0x10, // 4
+		0xF0,
+		0x80,
+		0xF0,
+		0x10,
+		0xF0, // 5
+		0xF0,
+		0x80,
+		0xF0,
+		0x90,
+		0xF0, // 6
+		0xF0,
+		0x10,
+		0x20,
+		0x40,
+		0x40, // 7
+		0xF0,
+		0x90,
+		0xF0,
+		0x90,
+		0xF0, // 8
+		0xF0,
+		0x90,
+		0xF0,
+		0x10,
+		0xF0, // 9
+		0xF0,
+		0x90,
+		0xF0,
+		0x90,
+		0x90, // A
+		0xE0,
+		0x90,
+		0xE0,
+		0x90,
+		0xE0, // B
+		0xF0,
+		0x80,
+		0x80,
+		0x80,
+		0xF0, // C
+		0xE0,
+		0x90,
+		0x90,
+		0x90,
+		0xE0, // D
+		0xF0,
+		0x80,
+		0xF0,
+		0x80,
+		0xF0, // E
+		0xF0,
+		0x80,
+		0xF0,
+		0x80,
+		0x80, // F
+	}
+
+	// Load the built-in sprites into RAM.
+	for sprite, i in SPRITES {
+		memory[i] = sprite
+	}
+
 	PC = 512
 
 	handle, err := os.open(LOG_PATH, os.O_CREATE | os.O_WRONLY)
@@ -84,45 +199,214 @@ interpreter_initialize :: proc(chip: ^Interpreter) -> bool {
 	return true
 }
 
-interpreter_tick :: proc(chip: ^Interpreter, ticks: u32) -> Instruction {
+interpreter_tick :: proc(chip: ^Interpreter, ticks: u32) {
 	using chip
+
+	if waiting_for_key {
+
+	}
 
 	// Try to parse an instruction from memory.
 	{
-		instruction := Instruction.Invalid
-
-		next_byte_index := cast(int)PC >= MEM_LENGTH ? MEM_LENGTH : cast(int)(PC + 1)
+		next_byte_index := cast(int)(PC >= MEM_LENGTH ? MEM_LENGTH : PC + 1)
 		two_bytes: u16 = cast(u16)memory[PC] << 8
-		kk := cast(u16)memory[next_byte_index]
-		two_bytes |= kk
+		kk := memory[next_byte_index]
+		two_bytes |= cast(u16)kk
 
-		highest_nibble := cast(u8)(two_bytes >> 12)
-		x := (two_bytes >> 8) & MASK_X
-		y := kk & MASK_Y
-		nnn := two_bytes << 12
+		if Debug_Flag.Print_Instructions in
+		   debug_flags {fmt.printf("0x%X == %i\n", two_bytes, two_bytes)}
 
-		if two_bytes == cast(u16)Instruction.CLS {
-			return Instruction.CLS
+		highest_nibble: u8 = cast(u8)(two_bytes >> 12)
+		nnn := (two_bytes & 0x0FFF)
+		x := nnn >> 8
+		y := kk >> 4
+		nibble: u8 = cast(u8)(kk & 0xF)
+
+		for ins in Instruction {
+			// Check for "total equality" of instruction. (CLS / RET)
+			{
+				if equals_instruction(two_bytes, Instruction.CLS) {
+					for &row in display {
+						for &pixel in row {
+							pixel = false
+						}
+					}
+				}
+
+				if equals_instruction(two_bytes, Instruction.RET) {
+					SP -= 1
+					PC = stack[SP] + 2
+				}
+			}
+
+			// Check highest nibble to refine our search.
+			if highest_nibble == get_instruction_nibble(ins) {
+				casted_ins := cast(u16)ins
+				#partial switch ins {
+				case Instruction.JP_nnn:
+					PC = nnn - 2
+				case Instruction.CALL_nnn:
+					{
+						stack[SP] = PC
+						SP += 1
+						PC = nnn - 2
+					}
+				case Instruction.SE_Vx_kk:
+					if V[x] == kk {PC += 2}
+				case Instruction.SNE_Vx_kk:
+					if V[x] != kk {PC += 2}
+				case Instruction.SE_Vx_Vy:
+					if V[x] == V[y] {PC += 2}
+				case Instruction.LD_Vx_kk:
+					V[x] = kk
+				case Instruction.ADD_Vx_kk:
+					V[x] += kk
+
+				// Instructions starting with an 8 nibble.
+				case Instruction.LD_Vx_Vy:
+					{
+						lowest_nibble := get_instruction_nibble(ins, 3)
+
+						switch lowest_nibble {
+						case get_instruction_nibble(Instruction.LD_Vx_Vy, 3):
+							V[x] = V[y]
+						case get_instruction_nibble(Instruction.OR_Vx_Vy, 3):
+							V[x] |= V[y]
+						case get_instruction_nibble(Instruction.AND_Vx_Vy, 3):
+							V[x] &= V[y]
+						case get_instruction_nibble(Instruction.XOR_Vx_Vy, 3):
+							V[x] ~= V[y]
+						case get_instruction_nibble(Instruction.ADD_Vx_Vy, 3):
+							{
+								add_result := V[x] + V[y]
+								if add_result > 255 {V[0xF] = 1} else {V[0xF] = 0}
+								V[x] = add_result
+							}
+						case get_instruction_nibble(Instruction.SUB_Vx_Vy, 3):
+							{
+								V[0xF] = V[x] > V[y] ? 1 : 0
+								V[x] -= V[y]
+							}
+						case get_instruction_nibble(Instruction.SHR_Vx, 3):
+							lbs := V[x]
+							lbs <<= 3
+							if lbs != 0 {V[0xF] = 1} else {V[0xF] /= 2}
+						case get_instruction_nibble(Instruction.SUBN_Vx_Vy, 3):
+							{
+								V[0xF] = V[x] > V[y] ? 1 : 0
+								V[x] -= V[y]
+							}
+						case get_instruction_nibble(Instruction.SHL_Vx, 3):
+							{
+								msb := V[x]
+								msb >>= 3
+								V[0xF] = msb == 1 ? 1 : 0
+								V[x] *= 2
+							}
+						}
+					}
+
+				case Instruction.SNE_Vx_Vy:
+					if V[x] != V[y] {PC += 2}
+				case Instruction.LD_I_nnn:
+					I = nnn
+				case Instruction.JP_V0_nnn:
+					PC = nnn + cast(u16)V[0]
+				case Instruction.RND_Vx_kk:
+					{
+						random_value := cast(u8)rnd.int_max(255)
+						V[x] = random_value & kk
+					}
+				case Instruction.DRW_Vx_Vy_nibble:
+					{
+						V[0xF] = 0
+						screen_x := V[x]
+						screen_y := V[y]
+
+						for y_index: u8 = 0; y_index < nibble; y_index += 1 {
+							sprite := memory[I + cast(u16)y_index]
+
+							for current_bit: u8 = 0; current_bit < 8; current_bit += 1 {
+								active := (sprite & (0x80 >> current_bit)) != 0
+								x_location := current_bit + screen_x
+								y_location := y_index + screen_y
+								if active && display[x_location][y_location] {
+									V[0xF] = 1
+								}
+
+								if active {
+									display[x_location][y_location] ~= true
+								}
+							}
+
+						}
+					}
+
+				// Ex9E - ExA1
+				case Instruction.SKP_Vx:
+					{
+						low_byte: u8 = cast(u8)(casted_ins << 8)
+						switch low_byte {
+						case get_instructon_byte(Instruction.SKP_Vx, 1):
+							if keyboard[V[x]] {PC += 2}
+						case get_instructon_byte(Instruction.SKNP_Vx, 1):
+							if !keyboard[V[x]] {PC += 2}
+						}
+
+					}
+
+				// Fx07 - Fx65
+				case Instruction.LD_Vx_DT:
+					{
+						low_byte: u8 = cast(u8)(casted_ins << 8)
+						switch low_byte {
+						case get_instructon_byte(Instruction.LD_Vx_DT, 1):
+							V[x] = DT
+						case get_instructon_byte(Instruction.LD_Vx_K, 1):
+							{
+								// Wait for a key press, store the value of the key in Vx.
+								// All execution stops until a key is pressed, then the value of that key is stored in Vx.
+							}
+						case get_instructon_byte(Instruction.LD_DT_VX, 1):
+							DT = V[x]
+						case get_instructon_byte(Instruction.ADD_I_Vx, 1):
+							I += cast(u16)V[x]
+						case get_instructon_byte(Instruction.LD_F_Vx, 1):
+							{
+								I = cast(u16)memory[cast(u16)(V[x]) * I]
+								// Set I = location of sprite for digit Vx.
+								// The value of I is set to the location for the hexadecimal sprite corresponding to the value of Vx. 
+							}
+						case get_instructon_byte(Instruction.LD_B_Vx, 1):
+						// Store BCD representation of Vx in memory locations I, I+1, and I+2.
+						// The interpreter takes the decimal value of Vx, and places the hundreds digit in memory at location in I, the tens digit at location I+1, and the ones digit at location I+2.
+						case get_instructon_byte(Instruction.STORE_V0_TO_Vx_AT_I, 1):
+							{
+								register_number := 0
+								for index := I; index < I + x; index += 1 {
+									memory[index] = V[register_number]
+									register_number += 1
+								}
+							}
+						case get_instructon_byte(Instruction.READ_FROM_I_INTO_V0_TO_Vx, 1):
+							{
+								register_number := 0
+								for index := I; index < I + x; index += 1 {
+									V[register_number] = memory[index]
+									register_number += 1
+								}
+							}
+						}
+
+					}
+
+				}
+			}
 		}
-
-		// // if two_bytes & Instruction.JP_nnn {
-		// 	log(chip, "Jump")
-		// }
-
-		// for ins in Instruction {
-		// 	casted_ins := cast(u16)(ins)
-		// 	if two_bytes == casted_ins {
-		// 		// logf(chip, "Instruction: %s : 0x%X\n", ins, two_bytes)
-		// 	}
-		// }
 		PC += 2
 	}
 
-	if PC >= MEM_LENGTH {
-		PC = 512
-	}
-
-	return Instruction.Invalid
+	if Debug_Flag.Print_PC_Ticks in chip.debug_flags {print_PC(chip)}
 }
 
 interpreter_destroy :: proc(chip: ^Interpreter) {
@@ -147,38 +431,74 @@ log :: proc(chip: ^Interpreter, a: ..any) {
 log_address :: proc(chip: ^Interpreter, address: int) {
 	using chip
 	value_at_address := memory[address]
-	fmt.fprintf(
-		chip.log_file,
+	fmt.fprintf(chip.log_file, "[0x%X]:0x%X == %#b\n", address, value_at_address, value_at_address)
+}
+
+// Print the current PC address and value.
+@(private = "file")
+print_PC :: proc(chip: ^Interpreter) {
+	using chip
+	value_at_address := memory[PC]
+	fmt.printf(
 		"[0x%X (%i)]: 0x%X == %d === %#b\n",
-		address,
-		address,
+		PC,
+		PC,
 		value_at_address,
 		value_at_address,
 		value_at_address,
 	)
 }
 
+@(private = "file")
+get_instruction_nibble :: proc(ins: Instruction, which: u8 = 0) -> u8 {
+	converted := cast(u16)ins
+	if which == 0 {
+		converted >>= 12
+		return cast(u8)converted
+	}
 
-//b 0000 0000 0000 0000
-//  	 x    y    n
-//			 [   kk   ]
-//		 [    nnn     ]
+	if which == 1 {
+		converted >>= 8
+		converted |= 0xf
+		return cast(u8)converted
+	}
 
-// nnn/addr = 12bit: lowest 12 bits
-// n/nibble = 4bit: lowest 4 bits of the instruction
-// x = 4bit: lower bits of higher byte of the instruction
-// y = 4bit: upper bits of lower byte of the instruction
-// kk/byte = 8bit: lowest 8 bits of the instruction
+	if which == 2 {
+		converted >>= 4
+		converted |= 0xff
+		return cast(u8)converted
+	}
 
-// Vx == register number of the x nibble of the instruction
-// Vy == register number of the y nibble of the instruction
+	if which == 3 {
+		converted <<= 12
+		return cast(u8)converted
+	}
 
-// All instructions are 2 bytes long and are stored most-significant-byte first. 
-// In memory, the first byte of each instruction should be located at an even addresses. 
-// If a program includes sprite data, it should be padded so any instructions following it will be properly situated in RAM.
+	return 0
+}
+
+@(private = "file")
+get_instructon_byte :: proc(ins: Instruction, which: u8 = 0) -> u8 {
+	converted := cast(u16)ins
+	if which == 0 {
+		converted >>= 8
+		return cast(u8)converted
+	}
+
+	if which == 1 {
+		converted <<= 8
+		return cast(u8)converted
+	}
+
+	return 0
+}
+
+@(private = "file")
+equals_instruction :: proc(value: u16, ins: Instruction) -> bool {
+	return value == cast(u16)ins
+}
 
 Instruction :: enum u16 {
-	Invalid                   = 0x0000,
 	CLS                       = 0x00E0, // CLS.  Clear the display.
 	RET                       = 0x00EE, // RET.  Return from a subroutine. The interpreter sets the program counter to the address at the top of the stack, then subtracts 1 from the stack pointer.
 	JP_nnn                    = 0x1000, // 1nnn. Jump to location nnn. The interpreter sets the program counter to nnn.
